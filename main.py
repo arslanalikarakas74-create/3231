@@ -10,10 +10,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles # EKLENDİ
+from pydantic import BaseModel, Field
 import uvicorn
 
 # 1. Ayarlar ve Loglama
@@ -21,10 +22,16 @@ LOGGER = logging.getLogger("traffic_api")
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "traffic_model.pkl"
 SCALER_PATH = BASE_DIR / "scaler.pkl"
+STATIC_DIR = BASE_DIR / "static" # EKLENDİ
+
 ISTANBUL_TIMEZONE = ZoneInfo("Europe/Istanbul")
 
 # 2. FastAPI Kurulumu
 app = FastAPI(title="AI Traffic Prediction API", version="1.0.0")
+
+# Statik dosyaları (logonuzun olduğu yer) tanıtıyoruz
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -85,8 +92,11 @@ def get_holiday_checker(year: int):
 def startup_event():
     setup_logging()
     global MODEL_BUNDLE
-    MODEL_BUNDLE = load_model_bundle()
-    LOGGER.info("Model başarıyla yüklendi.")
+    try:
+        MODEL_BUNDLE = load_model_bundle()
+        LOGGER.info("Model başarıyla yüklendi.")
+    except Exception as e:
+        LOGGER.error(f"Model yüklenirken hata oluştu: {e}")
 
 @app.get("/")
 async def serve_frontend():
@@ -97,7 +107,6 @@ async def predict_duration(payload: TrafficPredictionRequest):
     if MODEL_BUNDLE is None:
         raise HTTPException(status_code=503, detail="Model yüklenemedi")
 
-    # Özellik Mühendisliği
     dist = haversine_km(payload.origin_latitude, payload.origin_longitude, 
                         payload.destination_latitude, payload.destination_longitude)
     dt = payload.request_datetime.astimezone(ISTANBUL_TIMEZONE)
@@ -107,7 +116,7 @@ async def predict_duration(payload: TrafficPredictionRequest):
         payload.destination_longitude, dist, float(dt.hour), float(dt.minute),
         float(dt.weekday()), 1.0 if dt.weekday() >= 5 else 0.0,
         1.0 if dt.date() in get_holiday_checker(dt.year) else 0.0,
-        1.0 # Peak multiplier (basitleştirilmiş)
+        1.0
     ]]
     
     scaled = MODEL_BUNDLE.scaler.transform(features)
